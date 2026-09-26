@@ -1,0 +1,19 @@
+# Environments & API Keys (Keamanan)
+.env
+*.env
+
+# Python Cache & Temporary Files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.venv/
+venv/
+ENV/
+
+# Jupyter Notebook / Google Colab Checkpoints
+.ipynb_checkpoints/
+
+# Streamlit Configuration Files
+.streamlit/secrets.toml
