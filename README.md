@@ -1,2 +1,4 @@
-# projecttiar
-projecttiar
+Plaintext
+streamlit
+google-genai
+python-dotenv
