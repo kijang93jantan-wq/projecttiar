@@ -1,133 +1,137 @@
-%%writefile streamlit_chat_app.py
-# Import library yang dibutuhkan
-import streamlit as st          # framework web app
-from google import genai         # SDK Gemini dari Google
+import streamlit as st
+from google import genai
+from google.genai import types
 
 # ── 1. Konfigurasi Halaman ───────────────────────────────────────────────────
-# st.title() dan st.caption() menampilkan judul dan keterangan di bagian atas
-st.title("Gemini Chatbot")
-st.caption("Chatbot sederhana menggunakan Google Gemini Flash")
+st.set_page_config(
+    page_title="ShopBot - Asisten Online Shop",
+    page_icon="🛍️",
+    layout="wide"
+)
 
-# ── 2. Sidebar: Pengaturan App ───────────────────────────────────────────────
-# Semua widget di dalam blok 'with st.sidebar:' akan muncul di panel samping
+st.title("🛍️ ShopBot - Asisten Belanja Online")
+st.caption("Chatbot Asisten Toko Online untuk Pencarian Produk & Informasi Stok")
+
+# ── 2. Sidebar: Pengaturan & Konfigurasi ─────────────────────────────────────
 with st.sidebar:
-    st.subheader("Pengaturan")
-
-    # Kotak input untuk API key
-    # type="password" menyembunyikan teks yang diketik (muncul sebagai titik-titik)
+    st.subheader("⚙️ Pengaturan")
     google_api_key = st.text_input("Google AI API Key", type="password")
-
-    # Tombol untuk mereset percakapan
-    # Parameter 'help' menampilkan tooltip saat kursor diarahkan ke tombol
-    reset_button = st.button("Reset Percakapan", help="Hapus semua pesan dan mulai dari awal")
+    
+    gaya_bahasa = st.selectbox(
+        "Gaya Bahasa Bot:",
+        ("Ramah & Ceria", "Sopan & Formal", "Casual / Santai")
+    )
+    
+    reset_button = st.button("Reset Percakapan", help="Hapus semua riwayat chat")
 
 # ── 3. Validasi API Key ──────────────────────────────────────────────────────
-# Kalau user belum memasukkan API key, tampilkan pesan dan hentikan eksekusi
 if not google_api_key:
-    st.info("Masukkan Google AI API Key di sidebar untuk mulai chat.", icon="🗝️")
-    # st.stop() menghentikan eksekusi skrip di titik ini
-    # Kode setelah st.stop() tidak akan dijalankan
+    st.info("Silakan masukkan Google AI API Key di sidebar untuk mulai menggunakan ShopBot.", icon="🗝️")
     st.stop()
 
-# ── 4. Inisialisasi Gemini Client ────────────────────────────────────────────
-# Bagian ini hanya membuat client baru kalau:
-# - Client belum pernah dibuat (pertama kali app dijalankan), ATAU
-# - User mengganti API key di sidebar
-#
-# Kenapa perlu dicek seperti ini?
-# Karena setiap interaksi user menyebabkan seluruh skrip dijalankan ulang.
-# Tanpa pengecekan ini, kita akan membuat client baru setiap kali user ketik pesan
-# — yang artinya konteks percakapan akan hilang terus.
-#
-# getattr(obj, 'attr', default) = cara aman mengakses atribut yang mungkin belum ada
+# ── 4. Pengetahuan Toko & Katalog Produk (Knowledge Base) ───────────────────
+KATALOG_TOKO = """
+Nama Toko: ElectroZone Official Store
+Platform: Online Shop Electronics & Gadgets
+Jam Operasional CS: 08.00 - 21.00 WIB
+Kebijakan Garansi: Semua produk bergaransi resmi 1 tahun. Gratis ongkir seluruh Indonesia minimal belanja Rp 100.000.
+
+Daftar Katalog Produk & Stok:
+1. Laptop UltraBook Pro 14
+   - Harga: Rp 12.500.000
+   - Spesifikasi: Intel i7 Gen 13, RAM 16GB, SSD 512GB, Layar 14 inch OLED
+   - Stok: 5 unit
+
+2. Smartphone X-Pro 5G
+   - Harga: Rp 7.999.000
+   - Spesifikasi: Kamera 108MP, Baterai 5000mAh, RAM 8GB, Storage 256GB
+   - Stok: 12 unit
+
+3. Wireless Earbuds Noise-Cancelling
+   - Harga: Rp 899.000
+   - Spesifikasi: Bluetooth 5.3, Active Noise Cancelling, Baterai tahan 24 jam
+   - Stok: 20 unit
+
+4. Smartwatch FitTrack 2
+   - Harga: Rp 1.250.000
+   - Spesifikasi: Sensor Detak Jantung, GPS, Waterproof IP68, Baterai 7 hari
+   - Stok: 8 unit
+
+5. Keyboard Mekanik Wireless RGB
+   - Harga: Rp 650.000
+   - Spesifikasi: Hot-swappable, Bluetooth/2.4Ghz, Battery 3000mAh
+   - Stok: 15 unit
+"""
+
+system_instruction = f"""
+Kamu adalah "ShopBot", Asisten Penjualan Virtual yang sangat ramah dan responsif untuk toko online "ElectroZone".
+Tugas kamu:
+1. Membantu pembeli mencari produk yang sesuai kebutuhan mereka berdasarkan data katalog berikut.
+2. Memberikan informasi harga, spesifikasi singkat, dan status ketersediaan stok.
+3. Memberikan rekomendasi produk jika pembeli bingung memilih.
+
+Gunakan data katalog berikut sebagai acuan utama:
+{KATALOG_TOKO}
+
+Aturan:
+- Gunakan gaya bahasa: {gaya_bahasa}.
+- Selalu sebutkan harga dan stok barang jika ditanyakan oleh calon pembeli.
+- Jika pembeli menanyakan produk di luar katalog di atas, jawab dengan sopan bahwa produk tersebut belum tersedia di toko ElectroZone.
+"""
+
+# ── 5. Inisialisasi Gemini Client & Chat Session ────────────────────────────
 if ("genai_client" not in st.session_state) or (
     getattr(st.session_state, "_last_key", None) != google_api_key
 ):
     try:
-        # Buat client Gemini baru dengan API key dari sidebar
         st.session_state.genai_client = genai.Client(api_key=google_api_key)
-
-        # Simpan key yang dipakai — untuk deteksi perubahan key nanti
         st.session_state._last_key = google_api_key
-
-        # Kalau key berganti, hapus session chat lama
-        # .pop() menghapus key dari dict dengan aman (tidak error kalau key tidak ada)
         st.session_state.pop("chat", None)
         st.session_state.pop("messages", None)
-
     except Exception as e:
         st.error(f"API Key tidak valid: {e}")
         st.stop()
 
-# ── 5. Inisialisasi Chat Session & Riwayat Pesan ────────────────────────────
-# Inisialisasi chat session Gemini kalau belum ada
 if "chat" not in st.session_state:
-    # Buat chat session baru dengan model gemini-2.5-flash
-    # Session ini menyimpan konteks percakapan di sisi Gemini
     st.session_state.chat = st.session_state.genai_client.chats.create(
-        model="gemini-3.8-flash"
+        model="gemini-3.8-flash",
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.3
+        )
     )
 
-# Inisialisasi list riwayat pesan kalau belum ada
-# List ini menyimpan semua pesan untuk ditampilkan kembali saat skrip dijalankan ulang
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Halo Kak! 👋 Selamat datang di ElectroZone! Lagi cari gadget apa hari ini?"}
+    ]
 
 # ── 6. Tombol Reset ──────────────────────────────────────────────────────────
-# Kalau tombol reset diklik, hapus chat session dan riwayat pesan
 if reset_button:
     st.session_state.pop("chat", None)
     st.session_state.pop("messages", None)
-    # st.rerun() memaksa Streamlit me-refresh halaman dari awal
-    # Ini akan menjalankan ulang seluruh skrip, dan karena session sudah dihapus,
-    # chat baru akan dibuat di langkah 5
     st.rerun()
 
 # ── 7. Tampilkan Riwayat Percakapan ─────────────────────────────────────────
-# Loop ini menampilkan semua pesan yang sudah ada di session_state
-# Setiap kali skrip dijalankan ulang, pesan-pesan ini ditampilkan kembali
 for msg in st.session_state.messages:
-    # st.chat_message() membuat bubble chat dengan role yang sesuai
-    # role "user" = bubble di kanan, role "assistant" = bubble di kiri
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── 8. Input & Respons ───────────────────────────────────────────────────────
-# st.chat_input() membuat kotak input di bagian bawah halaman
-# Nilai yang diketik user tersimpan di variabel 'prompt'
-# Variabel ini bernilai None kalau user belum mengirim pesan
-prompt = st.chat_input("Ketik pesanmu di sini...")
+# ── 8. Input & Respons Chatbot ──────────────────────────────────────────────
+prompt = st.chat_input("Tanya produk, stok, atau rekomendasi barang...")
 
-# Hanya jalankan bagian ini kalau user mengirim pesan
 if prompt:
-    # Langkah 1: Tambah pesan user ke riwayat
     st.session_state.messages.append({"role": "user", "content": prompt})
-
-    # Langkah 2: Tampilkan bubble pesan user
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Langkah 3: Kirim ke Gemini dan tampilkan respons
     try:
-        # Kirim pesan ke Gemini melalui chat session yang sudah ada
-        # chat.send_message() secara otomatis menyertakan riwayat percakapan sebelumnya
         response = st.session_state.chat.send_message(prompt)
-
-        # Ambil teks dari respons
-        # hasattr() memeriksa apakah objek punya atribut tertentu
-        # Ini mencegah error kalau format respons tidak terduga
-        if hasattr(response, "text"):
-            answer = response.text
-        else:
-            answer = str(response)
-
+        answer = response.text if hasattr(response, "text") else str(response)
     except Exception as e:
-        # Kalau ada error (misal: rate limit, koneksi putus), tampilkan pesan error
-        answer = f"Terjadi error: {e}"
+        answer = f"Maaf Kak, terjadi kendala sistem: {e}"
 
-    # Langkah 4: Tampilkan bubble respons assistant
     with st.chat_message("assistant"):
         st.markdown(answer)
 
-    # Langkah 5: Simpan respons ke riwayat
     st.session_state.messages.append({"role": "assistant", "content": answer})
